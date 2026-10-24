@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:sensors_plus/sensors_plus.dart';
+import '../services/food_classifier.dart';
 import '../services/food_service.dart';
 import '../services/geo.dart';
 import '../services/guidance.dart';
@@ -95,6 +97,7 @@ class _ArScreenState extends State<ArScreen> {
 
   // Food identification: one-shot, user-triggered (a cloud call per tap, not per frame).
   final _foodService = FoodService();
+  late final _foodOnDevice = FoodClassifier(_sceneClassifier);
   bool _foodBusy = false;
   FoodResult? _food;
   String? _foodMessage; // error / "no food found" text shown in place of a result
@@ -200,11 +203,18 @@ class _ArScreenState extends State<ArScreen> {
     _runGate();
   }
 
-  PoseConfidence _poseNow() => PoseConfidence.from(
-        gpsAccuracyM: _gpsAccuracyM,
-        hasHeading: _heading != 0 || _jitter.degrees > 0,
-        headingJitterDeg: _jitter.degrees,
-      );
+  PoseConfidence _poseNow() {
+    // A simulated walk has, by construction, a perfect position and
+    // heading. Letting the confidence engine derive a band from a real
+    // compass sitting on a desk would degrade the overlay in the middle of
+    // a recording for reasons that have nothing to do with the demo.
+    if (settings.demoWalk) return const PoseConfidence(1, PoseBand.solid, '');
+    return PoseConfidence.from(
+      gpsAccuracyM: _gpsAccuracyM,
+      hasHeading: _heading != 0 || _jitter.degrees > 0,
+      headingJitterDeg: _jitter.degrees,
+    );
+  }
 
   void _onPosition(Position p) {
     _lastPosition = p;
@@ -319,14 +329,29 @@ class _ArScreenState extends State<ArScreen> {
       _food = null;
       _foodMessage = null;
     });
+    final orientation = _cam?.description.sensorOrientation ?? 90;
     try {
-      final pos = _lastPosition;
-      final r = await _foodService.identify(frame, _cam?.description.sensorOrientation ?? 90,
-          lat: pos?.latitude, lng: pos?.longitude, destination: widget.destination.name);
+      FoodResult? r;
+      try {
+        final pos = _lastPosition;
+        r = await _foodService.identify(frame, orientation,
+            lat: pos?.latitude, lng: pos?.longitude, destination: widget.destination.name);
+      } on FoodServiceException {
+        // No OpenAI key, or no network. Fall back to the MobileNet already
+        // resident for the scene gate: narrower, but it needs neither, and
+        // this feature is most often used exactly where both are missing.
+        //
+        // Deliberately not rethrowing when the fallback finds nothing. The
+        // cloud error is true but unhelpful: the user pointed at something
+        // and got told to edit a config file, when the honest answer is that
+        // no dish was recognised. Which services are configured is already
+        // stated in preferences.
+        r = await _foodOnDevice.identify(frame, orientation);
+      }
       if (mounted) {
         setState(() {
           _food = r;
-          _foodMessage = r == null ? 'No food spotted — point the camera at a dish and try again.' : null;
+          _foodMessage = r == null ? 'No dish recognised. Fill the frame with the food and try again.' : null;
         });
       }
     } on FoodServiceException catch (e) {
@@ -353,7 +378,10 @@ class _ArScreenState extends State<ArScreen> {
     super.dispose();
   }
 
-  bool get _navUnlocked => _bypassGate || (_gateResult?.outdoors ?? false);
+  /// The scene gate exists to stop people using AR indoors. A demo walk is
+  /// filmed indoors by definition, so it unlocks too — otherwise the first
+  /// thing a recording shows is the gate refusing to open.
+  bool get _navUnlocked => _bypassGate || settings.demoWalk || (_gateResult?.outdoors ?? false);
 
   // TEMPORARY: live pitch readout for calibrating the ground trail's
   // horizon. Tilt the phone down toward the ground and confirm pitchDeg
@@ -418,42 +446,6 @@ class _ArScreenState extends State<ArScreen> {
     );
   }
 
-  // Live View-style chevrons. These are NOT decals painted on the road:
-  // each chevron is an upright billboard standing in the world at
-  // _chevronHeightM above the ground, drawn as a blue shell around a white
-  // face and extruded toward the viewer so it reads as a solid object.
-  // Ground decals were tried first and lose almost all of their shape to
-  // foreshortening a few metres out.
-  //
-  // Placement is still real 3D — each chevron's centre is projected through
-  // the same pinhole camera as everything else, so it sits at a true world
-  // distance and shrinks correctly. Only its *orientation* is screen-space:
-  // it points at wherever the next chevron lands on screen, which is what
-  // makes the trail swing sideways through a turn and stand as a receding
-  // column on a straight.
-  static const _camHeightM = 1.3; // approx phone height above ground, held up while walking
-  static const _vFovDeg = 70.0; // approx vertical FOV in portrait, degrees
-  static const _chevronHeightM = 0.70; // centre of each chevron above the ground
-  static const _chevronHalfM = 0.34; // half the chevron's height, in metres
-  static const _chevronDepth = 0.42; // extrusion length, as a fraction of chevron size
-  static const _chevronStroke = 0.055; // shell thickness, as a fraction of chevron size
-
-  // Unit chevron pointing along +x, half-height 1. Traced outer tip, down
-  // the upper arm, back along its inner edge through the inner tip, and out
-  // the lower arm.
-  static const _chevronShape = [
-    Offset(0.62, 0), // outer tip
-    Offset(-0.38, -1), // upper back, outer
-    Offset(0.18, -1), // upper back, inner
-    Offset(0.06, 0), // inner tip
-    Offset(0.18, 1), // lower back, inner
-    Offset(-0.38, 1), // lower back, outer
-  ];
-
-  // Spaced so a near chevron is never tall enough to swallow the one behind
-  // it when the route runs dead ahead and the whole trail collapses onto one
-  // screen axis.
-  static const _trailDistancesM = [3.5, 5.8, 8.8, 12.5];
 
   // Screen bands reserved for the top/bottom chrome. The trail and any OCR
   // translation overlay are kept clear of these so they never render on top
@@ -493,7 +485,14 @@ class _ArScreenState extends State<ArScreen> {
   /// ground plane runs off to the horizon and everything collapses into a
   /// cluster of specks, and past ~60° the trail falls off the bottom of the
   /// screen. Clamping keeps the overlay legible in both cases.
-  double get _trailPitchRad => _pitchDeg.clamp(12.0, 55.0) * math.pi / 180;
+  double get _trailPitchRad {
+    // A demo is filmed with the phone flat on a desk or held casually, and
+    // the real pitch then throws the ground plane off the top of the frame
+    // entirely. Pin it to a natural held-up-while-walking angle so the path
+    // always lands where it would on the street.
+    if (settings.demoWalk) return 18 * math.pi / 180;
+    return _pitchDeg.clamp(12.0, 55.0) * math.pi / 180;
+  }
 
   Offset? _projectGround(double forward, double lateral, double phiRad, double fx, double fy, Size screen,
       {double heightM = 0}) {
@@ -507,88 +506,90 @@ class _ArScreenState extends State<ArScreen> {
     );
   }
 
+  // Camera model for every ground projection on this screen.
+  static const _camHeightM = 1.3; // approx phone height above ground, held up while walking
+  static const _vFovDeg = 70.0; // approx vertical FOV in portrait, degrees
+
+  /// The route as a painted ribbon on the road, with chevrons running along
+  /// it — the way Live View and every shipped AR walking navigator draws it.
+  ///
+  /// Separate floating markers were tried first and read badly: on a
+  /// straight they stack into one blob, and they never look like they are
+  /// *on* the street. A continuous surface follows the kerb, bends through
+  /// corners, and gives the chevrons something to sit on.
+  static const _ribbonHalfWidthM = 0.78; // half the painted width
+  static const _ribbonStartM = 1.4; // close enough to run off the bottom edge, far
+  // enough that the strip is not all foreground
+  static const _ribbonStepM = 1.1; // sampling interval along the route
+  static const _ribbonRangeM = 26.0; // how far ahead to paint
+
   Widget _arrow(double turn, Size screen) {
     final aligned = turn.abs() < 20;
     final phiRad = _trailPitchRad;
     final fx = (screen.width / 2) / math.tan(_fov * math.pi / 360);
     final fy = (screen.height / 2) / math.tan(_vFovDeg * math.pi / 360);
 
-    final marks = <_Chevron>[];
+    final left = <Offset>[];
+    final right = <Offset>[];
+    final centre = <Offset>[];
+    final widths = <double>[];
+
     final me = _me;
     if (me != null) {
       final pts = widget.route.points;
       final path = [me, ...pts.sublist(_wp.clamp(0, pts.length))];
 
-      // Pass one: where each chevron sits on screen, and how many pixels a
-      // metre spans at that depth (measured by projecting a 1 m rise).
-      final centres = <Offset>[];
-      final scales = <double>[];
-      // A long run of chevrons reads as certainty about ground we may not
-      // have localised. Shorten it when confidence is only a hint.
-      final maxMarks = math.max(2, (_trailDistancesM.length * _pose.trailFraction).round());
-      for (final d in _trailDistancesM.take(maxMarks)) {
+      // Ground-plane positions of the route ahead, relative to the camera.
+      final ground = <Offset>[];
+      for (var d = _ribbonStartM; d <= _ribbonRangeM * _pose.trailFraction; d += _ribbonStepM) {
         final target = _pointAtPathDistance(path, d);
-        if (target == null) break; // route ends before this distance
+        if (target == null) break;
         final relRad = angleDiff(_heading, bearingDeg(me, target)) * math.pi / 180;
         final dist = distanceM(me, target);
-        final f = dist * math.cos(relRad);
-        final l = dist * math.sin(relRad);
-        final c = _projectGround(f, l, phiRad, fx, fy, screen, heightM: _chevronHeightM);
-        final up = _projectGround(f, l, phiRad, fx, fy, screen, heightM: _chevronHeightM + 1);
-        if (c == null || up == null) break;
-        centres.add(c);
-        scales.add((c.dy - up.dy).abs() * _chevronHalfM);
+        ground.add(Offset(dist * math.cos(relRad), dist * math.sin(relRad)));
       }
 
-      // Pass two: orient each chevron toward the next one on screen. The
-      // last reuses the previous heading, and a degenerate delta (route dead
-      // ahead, everything piling on the vanishing point) falls back to
-      // pointing up-screen rather than spinning unpredictably.
-      for (var i = 0; i < centres.length; i++) {
-        final from = centres[i];
-        final to = i + 1 < centres.length ? centres[i + 1] : null;
-        var dir = to != null
-            ? to - from
-            : i > 0
-                ? from - centres[i - 1]
-                : const Offset(0, -1);
+      // Walk the strip, offsetting each sample perpendicular to the local
+      // direction of travel to get the two painted edges.
+      for (var i = 0; i < ground.length; i++) {
+        final here = ground[i];
+        final next = i + 1 < ground.length ? ground[i + 1] : null;
+        final prev = i > 0 ? ground[i - 1] : null;
+        final dir = next != null ? next - here : (prev != null ? here - prev : const Offset(1, 0));
         final len = dir.distance;
-        dir = len < 0.5 ? const Offset(0, -1) : dir / len;
+        if (len < 1e-3) continue;
+        final n = Offset(-dir.dy / len, dir.dx / len); // perpendicular, on the ground
 
-        if (from.dx < -120 || from.dx > screen.width + 120) break; // curved off-screen
-        if (scales[i] < 3) break; // too far to be worth drawing
-        marks.add(_Chevron(
-          centre: from,
-          dir: dir,
-          size: scales[i] * (settings.highContrast ? 1.3 : 1.0),
-          alpha: (1 - i / centres.length * 0.45).clamp(0.0, 1.0),
-        ));
+        final l = _projectGround(
+            here.dx + n.dx * _ribbonHalfWidthM, here.dy + n.dy * _ribbonHalfWidthM, phiRad, fx, fy, screen);
+        final r = _projectGround(
+            here.dx - n.dx * _ribbonHalfWidthM, here.dy - n.dy * _ribbonHalfWidthM, phiRad, fx, fy, screen);
+        final c = _projectGround(here.dx, here.dy, phiRad, fx, fy, screen);
+        if (l == null || r == null || c == null) break; // passed behind the camera
+
+        left.add(l);
+        right.add(r);
+        centre.add(c);
+        widths.add((l - r).distance);
       }
     }
 
-    // Blue while you're tracking the route, amber only while a turn is
-    // still pending.
-    // High contrast trades the softer brand blue for maximum separation
-    // from a sunlit street, and amber for near-black on white.
-    final hc = settings.highContrast;
-    final shell = hc
-        ? (aligned ? const Color(0xFF0B3FD6) : const Color(0xFFB45309))
-        : (aligned ? const Color(0xFF2B6BF0) : const Color(0xFFF59E0B));
-    final shellDark = hc
-        ? (aligned ? const Color(0xFF06217A) : const Color(0xFF7C3D06))
-        : (aligned ? const Color(0xFF1C4FD8) : const Color(0xFFC2740A));
+    // Teal while tracking the route, amber while a turn is pending.
+    final paint = aligned ? const Color(0xFF17C3DC) : const Color(0xFFFFA724);
 
     return Positioned.fill(
       child: IgnorePointer(
         child: CustomPaint(
           painter: _TrailPainter(
-            marks: marks,
-            shell: shell,
-            shellDark: shellDark,
-            // Phase of the pulse running out along the trail, taken from the
-            // wall clock because the accelerometer stream already rebuilds
-            // this widget continuously.
-            phase: (DateTime.now().millisecondsSinceEpoch % 1600) / 1600,
+            left: left,
+            right: right,
+            centre: centre,
+            widths: widths,
+            colour: paint,
+            opacity: _pose.overlayOpacity,
+            // Chevrons crawl forward along the ribbon, which is what makes
+            // it read as direction rather than as a painted stripe.
+            phase: (DateTime.now().millisecondsSinceEpoch % 2200) / 2200,
           ),
         ),
       ),
@@ -827,7 +828,9 @@ class _ArScreenState extends State<ArScreen> {
 
   Widget _foodButton() {
     return Positioned(
-      right: 12,
+      // Left side: the mini-map occupies the right corner, and the two were
+      // overlapping.
+      left: 12,
       bottom: _bottomBarReservedH - 28,
       child: FloatingActionButton(
         heroTag: 'foodFab',
@@ -934,14 +937,16 @@ class _ArScreenState extends State<ArScreen> {
   // with a small map. Drawn from the route polyline we already hold rather
   // than from map tiles — there is no map SDK in this app, and a plain
   // vector of the route is what the walker actually needs here.
-  static const _miniMapSize = 158.0;
+  static const _miniMapSize = 132.0;
 
   Widget _miniMap(Size screen) {
     final me = _me;
     if (me == null) return const SizedBox.shrink();
     return Positioned(
-      bottom: 104, // clear of the ETA bar, which is drawn after this
-      left: (screen.width - _miniMapSize) / 2,
+      // Bottom-right corner, as in every shipped navigator. Centred, it sat
+      // directly on top of the painted route.
+      bottom: settings.demoWalk ? 150 : 104,
+      left: screen.width - _miniMapSize - 14,
       width: _miniMapSize,
       height: _miniMapSize,
       child: IgnorePointer(
@@ -1129,7 +1134,7 @@ class _ArScreenState extends State<ArScreen> {
       child: SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          padding: EdgeInsets.fromLTRB(12, 0, 12, settings.demoWalk ? 52 : 12),
           child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
             Expanded(
               child: Container(
@@ -1273,89 +1278,106 @@ class _PoiMarker extends StatelessWidget {
   }
 }
 
-/// One billboard chevron, already reduced to screen space.
-class _Chevron {
-  final Offset centre;
-  final Offset dir; // unit vector the chevron points along, in screen space
-  final double size; // half-height in pixels
-  final double alpha;
-  const _Chevron({required this.centre, required this.dir, required this.size, required this.alpha});
-}
-
-/// Draws the chevrons as extruded solids: a stack of offset copies forms the
-/// blue side wall, then a white face with a blue shell lands on top. The
-/// extrusion is drawn inside a saveLayer so its overlapping copies composite
-/// once — drawing them individually at partial opacity leaves visible seams
-/// where they overlap.
+/// Paints the route as a ground-hugging ribbon with chevrons crawling along
+/// it. All geometry arrives already projected, so this is pure compositing
+/// over a surface that genuinely lies on the road plane.
 class _TrailPainter extends CustomPainter {
-  final List<_Chevron> marks;
-  final Color shell;
-  final Color shellDark;
+  final List<Offset> left, right, centre;
+  final List<double> widths; // on-screen ribbon width at each sample
+  final Color colour;
+  final double opacity;
   final double phase;
-  _TrailPainter({required this.marks, required this.shell, required this.shellDark, required this.phase});
 
-  Path _path(_Chevron m, Offset shift) {
-    final u = m.dir;
-    final v = Offset(-u.dy, u.dx); // perpendicular, screen space
-    final path = Path();
-    for (var i = 0; i < _ArScreenState._chevronShape.length; i++) {
-      final p = _ArScreenState._chevronShape[i];
-      final o = m.centre +
-          Offset(p.dx * u.dx + p.dy * v.dx, p.dx * u.dy + p.dy * v.dy) * m.size +
-          shift;
-      i == 0 ? path.moveTo(o.dx, o.dy) : path.lineTo(o.dx, o.dy);
+  _TrailPainter({
+    required this.left,
+    required this.right,
+    required this.centre,
+    required this.widths,
+    required this.colour,
+    required this.opacity,
+    required this.phase,
+  });
+
+  Path _ribbon() {
+    final p = Path();
+    if (left.length < 2) return p;
+    p.moveTo(left.first.dx, left.first.dy);
+    for (final o in left.skip(1)) {
+      p.lineTo(o.dx, o.dy);
     }
-    return path..close();
+    for (final o in right.reversed) {
+      p.lineTo(o.dx, o.dy);
+    }
+    return p..close();
   }
 
   @override
   void paint(Canvas canvas, Size size) {
-    // Far to near, so nearer chevrons overlap the ones behind them.
-    for (var i = marks.length - 1; i >= 0; i--) {
-      final m = marks[i];
+    if (left.length < 2 || opacity <= 0) return;
+    final ribbon = _ribbon();
+    final bounds = ribbon.getBounds();
 
-      // Pulse travelling away from the viewer, one chevron at a time.
-      final wave = (i / math.max(marks.length, 1)) - phase;
-      final lift = math.exp(-math.pow((wave - wave.roundToDouble()) * 3.2, 2).toDouble());
+    // Fade the far end out instead of cutting it off at a hard edge, which
+    // would read as the path stopping rather than receding.
+    canvas.drawPath(
+      ribbon,
+      Paint()
+        ..shader = ui.Gradient.linear(
+          Offset(bounds.center.dx, bounds.bottom),
+          Offset(bounds.center.dx, bounds.top),
+          [colour.withValues(alpha: 0.72 * opacity), colour.withValues(alpha: 0.12 * opacity)],
+        ),
+    );
 
-      final face = _path(m, Offset.zero);
-      final depth = m.dir * (-m.size * _ArScreenState._chevronDepth);
-
-      // Soft drop shadow, so the chevron separates from whatever is behind it.
-      canvas.drawPath(
-        _path(m, depth + Offset(0, m.size * 0.12)),
-        Paint()
-          ..color = Colors.black.withValues(alpha: m.alpha * 0.28)
-          ..maskFilter = MaskFilter.blur(BlurStyle.normal, m.size * 0.35),
-      );
-
-      // Halo.
-      canvas.drawPath(
-        face,
-        Paint()
-          ..color = shell.withValues(alpha: m.alpha * (0.22 + 0.25 * lift))
-          ..maskFilter = MaskFilter.blur(BlurStyle.normal, m.size * 0.5),
-      );
-
-      // Extruded side wall.
-      canvas.saveLayer(null, Paint()..color = Colors.white.withValues(alpha: m.alpha));
-      const steps = 14;
-      final wall = Paint()..color = shellDark;
-      for (var k = steps; k >= 1; k--) {
-        canvas.drawPath(_path(m, depth * (k / steps)), wall);
+    // Edge lines, so the ribbon has a defined kerb against busy tarmac.
+    final edge = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5
+      ..color = Colors.white.withValues(alpha: 0.5 * opacity)
+      ..strokeJoin = StrokeJoin.round;
+    for (final side in [left, right]) {
+      final p = Path()..moveTo(side.first.dx, side.first.dy);
+      for (final o in side.skip(1)) {
+        p.lineTo(o.dx, o.dy);
       }
-      canvas.restore();
+      canvas.drawPath(p, edge);
+    }
 
-      // Front face: white panel inside a blue shell.
-      canvas.drawPath(face, Paint()..color = Colors.white.withValues(alpha: m.alpha));
+    // Chevrons along the centre line, marching away from the viewer.
+    for (var i = 1; i < centre.length - 1; i++) {
+      // Evenly spaced in sample count, shifted by the animation phase.
+      final slot = (i + phase * 3) % 3;
+      if (slot >= 1) continue;
+
+      final here = centre[i];
+      final ahead = centre[i + 1];
+      final dir = ahead - here;
+      final len = dir.distance;
+      if (len < 1e-3) continue;
+      final u = dir / len;
+      final v = Offset(-u.dy, u.dx);
+
+      final w = widths[i] * 0.34;
+      final tip = here + u * (w * 0.95);
+      final a = here - u * (w * 0.35) + v * w;
+      final b = here - u * (w * 0.35) - v * w;
+
+      final chevron = Path()
+        ..moveTo(a.dx, a.dy)
+        ..lineTo(tip.dx, tip.dy)
+        ..lineTo(b.dx, b.dy);
+
+      // Depth fade matches the ribbon beneath, so a distant chevron does not
+      // float brighter than the surface it is painted on.
+      final t = 1 - i / centre.length;
       canvas.drawPath(
-        face,
+        chevron,
         Paint()
-          ..color = Color.lerp(shell, Colors.white, 0.18 * lift)!.withValues(alpha: m.alpha)
           ..style = PaintingStyle.stroke
-          ..strokeWidth = math.max(1.0, m.size * _ArScreenState._chevronStroke * 2)
+          ..strokeWidth = math.max(3.0, w * 0.42)
+          ..strokeCap = StrokeCap.round
           ..strokeJoin = StrokeJoin.round
-          ..isAntiAlias = true,
+          ..color = Colors.white.withValues(alpha: (0.35 + 0.55 * t) * opacity),
       );
     }
   }
@@ -1363,6 +1385,7 @@ class _TrailPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _TrailPainter oldDelegate) => true;
 }
+
 
 /// Plan view of the remaining route, rotated so the top of the circle is
 /// whichever way the walker is currently facing.

@@ -57,9 +57,14 @@ class SceneClassifier {
   /// among the matched classes, or `null` if the model found no match in
   /// either bucket for this frame (truly inconclusive — common indoors and
   /// out, since most ImageNet classes are neither).
-  Future<double?> outdoorScore(CameraImage image, int sensorOrientation) async {
+  /// Raw ranked predictions: (class index, probability), highest first.
+  ///
+  /// Exposed so other features can reuse the one model already resident in
+  /// memory — the food identifier reads the ImageNet food classes straight
+  /// out of this rather than loading a second network.
+  Future<List<(int, double)>> classify(CameraImage image, int sensorOrientation, {int topK = 5}) async {
     final interpreter = _interpreter;
-    if (interpreter == null) return null;
+    if (interpreter == null) return const [];
 
     final upright = decodeNv21Upright(image, sensorOrientation);
     final square = resizeSquare(upright, _inputSize);
@@ -76,11 +81,24 @@ class SceneClassifier {
     interpreter.run(input, output);
 
     final params = outputTensor.params; // quantization (scale, zeroPoint)
-    double outdoor = 0, indoor = 0;
-    for (var i = 0; i < _labels.length && i < output[0].length; i++) {
+    final scored = <(int, double)>[];
+    for (var i = 0; i < output[0].length; i++) {
       final q = output[0][i] as int;
       final prob = (q - params.zeroPoint) * params.scale;
-      if (prob <= 0) continue;
+      if (prob > 0) scored.add((i, prob));
+    }
+    scored.sort((a, b) => b.$2.compareTo(a.$2));
+    return scored.take(topK).toList();
+  }
+
+  Future<double?> outdoorScore(CameraImage image, int sensorOrientation) async {
+    // Keyword buckets need the whole distribution, not just the top few.
+    final ranked = await classify(image, sensorOrientation, topK: 1000);
+    if (ranked.isEmpty) return null;
+
+    double outdoor = 0, indoor = 0;
+    for (final (i, prob) in ranked) {
+      if (i >= _labels.length) continue;
       final label = _labels[i].toLowerCase();
       if (_outdoorKeywords.any(label.contains)) outdoor += prob;
       if (_indoorKeywords.any(label.contains)) indoor += prob;
@@ -89,6 +107,7 @@ class SceneClassifier {
     if (total < 0.02) return null; // neither bucket fired meaningfully
     return outdoor / total;
   }
+
 
   void dispose() => _interpreter?.close();
 }

@@ -12,6 +12,10 @@ Future<void> showSettingsSheet(BuildContext context) {
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
+    // Capped and scrollable: the sheet grew past the viewport once guidance
+    // and demo options were added, and a bottom sheet does not scroll by
+    // itself.
+    constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.88),
     builder: (_) => const _SettingsSheet(),
   );
 }
@@ -27,7 +31,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
   Widget build(BuildContext context) {
     return SafeArea(
       top: false,
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(22, 4, 22, 24),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('Preferences',

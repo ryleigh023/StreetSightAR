@@ -160,12 +160,15 @@ class _ArNavScreenState extends State<ArNavScreen> {
 
   /// Here the AR runtime's own view counts too: a placed trail means ARCore
   /// has a plane locked, which is far stronger evidence than GPS alone.
-  PoseConfidence _poseNow() => PoseConfidence.from(
-        gpsAccuracyM: _gpsAccuracyM,
-        hasHeading: _heading != 0 || _jitter.degrees > 0,
-        tracking: _nodes.isNotEmpty ? true : (_planeFound ? null : false),
-        headingJitterDeg: _jitter.degrees,
-      );
+  PoseConfidence _poseNow() {
+    if (settings.demoWalk) return const PoseConfidence(1, PoseBand.solid, '');
+    return PoseConfidence.from(
+      gpsAccuracyM: _gpsAccuracyM,
+      hasHeading: _heading != 0 || _jitter.degrees > 0,
+      tracking: _nodes.isNotEmpty ? true : (_planeFound ? null : false),
+      headingJitterDeg: _jitter.degrees,
+    );
+  }
 
   @override
   void dispose() {
