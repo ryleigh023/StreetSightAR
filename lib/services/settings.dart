@@ -33,6 +33,7 @@ class Settings extends ChangeNotifier {
   static const _kOnboarded = 'onboarded';
   static const _kTactile = 'tactileCompass';
   static const _kContrast = 'highContrast';
+  static const _kDemo = 'demoWalk';
 
   DistanceUnit unit = DistanceUnit.metric;
   NavMode mode = NavMode.ar;
@@ -52,8 +53,11 @@ class Settings extends ChangeNotifier {
   bool highContrast = false;
 
   /// Walks a route on a timer instead of waiting for real GPS movement.
-  /// Not persisted: a simulated position should never silently survive into
-  /// a real walk.
+  ///
+  /// Persisted, because it was resetting on every app restart and silently
+  /// falling back to a frozen indoor GPS fix — which looks exactly like the
+  /// simulator being broken. It stays visible in preferences so it can be
+  /// turned off deliberately.
   bool demoWalk = false;
 
   /// False until the first-run walkthrough has been completed or skipped.
@@ -78,6 +82,7 @@ class Settings extends ChangeNotifier {
     onboarded = p.getBool(_kOnboarded) ?? false;
     tactileCompass = p.getBool(_kTactile) ?? false;
     highContrast = p.getBool(_kContrast) ?? false;
+    demoWalk = p.getBool(_kDemo) ?? false;
     recents = p.getStringList(_kRecents) ?? [];
     saved = (p.getStringList(_kSaved) ?? []).map(_decodePlace).whereType<Place>().toList();
     notifyListeners();
@@ -121,8 +126,9 @@ class Settings extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setDemoWalk(bool v) {
+  Future<void> setDemoWalk(bool v) async {
     demoWalk = v;
+    await _prefs?.setBool(_kDemo, v);
     notifyListeners();
   }
 

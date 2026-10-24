@@ -17,7 +17,6 @@ import '../services/walk_simulator.dart';
 import '../services/settings.dart';
 import '../services/storefront_matcher.dart';
 import '../theme.dart';
-import '../widgets/demo_banner.dart';
 import 'arrival_sheet.dart';
 import '../services/places_service.dart';
 import '../services/poi.dart';
@@ -249,7 +248,7 @@ class _ArScreenState extends State<ArScreen> {
     // Spoken and felt cues ride the position stream, not the build: build
     // also runs on every compass and accelerometer tick, which carry no new
     // navigational information.
-    final remaining = distanceM(me, widget.destination.pos);
+    final remaining = remainingAlongRoute(pts, me, wp);
     final arrived = remaining < 20;
     final turn = angleDiff(_heading, bearingDeg(me, pts[wp]));
     _guide.announce(
@@ -402,7 +401,8 @@ class _ArScreenState extends State<ArScreen> {
     }
     final pts = widget.route.points;
     final me = _me;
-    final remaining = me == null ? widget.route.distanceM : distanceM(me, widget.destination.pos);
+    final remaining =
+        me == null ? widget.route.distanceM : remainingAlongRoute(pts, me, _wp);
     final arrived = me != null && remaining < 20;
     final turn = me == null ? 0.0 : angleDiff(_heading, bearingDeg(me, pts[_wp]));
     _tactile.update(arrived ? 0 : turn);
@@ -440,7 +440,6 @@ class _ArScreenState extends State<ArScreen> {
           ] else
             _gateOverlay(),
           _topBar(remaining, arrived),
-          if (settings.demoWalk) const DemoBanner(),
         ]);
       }),
     );
@@ -945,7 +944,7 @@ class _ArScreenState extends State<ArScreen> {
     return Positioned(
       // Bottom-right corner, as in every shipped navigator. Centred, it sat
       // directly on top of the painted route.
-      bottom: settings.demoWalk ? 150 : 104,
+      bottom: 104,
       left: screen.width - _miniMapSize - 14,
       width: _miniMapSize,
       height: _miniMapSize,
@@ -1134,7 +1133,7 @@ class _ArScreenState extends State<ArScreen> {
       child: SafeArea(
         top: false,
         child: Padding(
-          padding: EdgeInsets.fromLTRB(12, 0, 12, settings.demoWalk ? 52 : 12),
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
           child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
             Expanded(
               child: Container(

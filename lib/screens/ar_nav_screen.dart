@@ -18,7 +18,6 @@ import 'package:flutter_compass/flutter_compass.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:vector_math/vector_math_64.dart' as vm;
 
-import '../widgets/demo_banner.dart';
 import 'arrival_sheet.dart';
 
 import '../services/guidance.dart';
@@ -376,7 +375,7 @@ class _ArNavScreenState extends State<ArNavScreen> {
 
   double get _remainingM {
     final me = _me;
-    return me == null ? widget.route.distanceM : distanceM(me, widget.destination.pos);
+    return me == null ? widget.route.distanceM : remainingAlongRoute(widget.route.points, me, 0);
   }
 
   bool get _arrived => _me != null && _remainingM < 20;
@@ -429,7 +428,6 @@ class _ArNavScreenState extends State<ArNavScreen> {
           onBack: () => Navigator.pop(context),
           onReplace: _nodes.isEmpty ? null : _clearTrail,
         ),
-        if (settings.demoWalk) const DemoBanner(),
       ]),
     );
   }

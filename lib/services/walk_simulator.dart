@@ -19,7 +19,7 @@ typedef SimFix = ({LatLng pos, double heading, double speedMs, double accuracyM}
 /// instead of a mock of it.
 class WalkSimulator {
   final List<LatLng> path;
-  final double speedMs;
+  final double speedMs; // 0 means 'derive from route length'
 
   /// How often a fix is emitted. Faster than real GPS, because the demo
   /// should look smooth rather than realistic.
@@ -30,12 +30,26 @@ class WalkSimulator {
   double _travelled = 0;
   late final List<double> _cum; // cumulative distance at each vertex
 
-  WalkSimulator(this.path, {this.speedMs = 1.6}) {
+  /// [speedMs] defaults to whatever pace finishes the whole route in about
+  /// [_targetSeconds]. A real 1.3 m/s walk takes eighteen minutes on a two
+  /// kilometre route, which nobody is going to sit through in a demo, while
+  /// a fixed fast speed crawls on a short route and blurs past on a long
+  /// one. Scaling to a fixed duration keeps every demo the same length.
+  static const _targetSeconds = 90.0;
+
+  WalkSimulator(this.path, {double? speedMs}) : speedMs = speedMs ?? 0 {
     _cum = [0];
     for (var i = 0; i < path.length - 1; i++) {
       _cum.add(_cum.last + distanceM(path[i], path[i + 1]));
     }
+    if (this.speedMs <= 0) {
+      _pace = (totalM / _targetSeconds).clamp(1.2, 40.0);
+    } else {
+      _pace = this.speedMs;
+    }
   }
+
+  late final double _pace;
 
   double get totalM => _cum.isEmpty ? 0 : _cum.last;
 
@@ -45,7 +59,7 @@ class WalkSimulator {
     _travelled = 0;
     _timer = Timer.periodic(_tick, (_) {
       if (path.length < 2) return;
-      _travelled += speedMs * _tick.inMilliseconds / 1000;
+      _travelled += _pace * _tick.inMilliseconds / 1000;
 
       // Hold at the destination rather than looping: the arrival state is
       // part of what needs demonstrating.
@@ -59,7 +73,7 @@ class WalkSimulator {
       ctl.add((
         pos: at,
         heading: heading,
-        speedMs: done ? 0 : speedMs,
+        speedMs: done ? 0 : _pace,
         // A believable urban fix. Deliberately not 1 m: the confidence
         // engine should sit in its normal band during a demo, not an
         // artificially perfect one.
