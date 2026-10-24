@@ -93,17 +93,25 @@ class PoseConfidence {
   /// certainty about ground we have not actually localised.
   double get trailFraction => switch (band) {
         PoseBand.solid => 1.0,
-        PoseBand.hint => 0.5,
-        PoseBand.fallback => 0.0,
+        PoseBand.hint => 0.65,
+        // Never zero. Hiding the path entirely was the honest choice on
+        // paper and the wrong one in practice: a fresh outdoor GPS fix sits
+        // in this band for the first half-minute, so the user walks out,
+        // opens the app and sees nothing at all. A short, dim path plus the
+        // status chip says "roughly this way, not sure yet", which is both
+        // truthful and usable.
+        PoseBand.fallback => 0.45,
       };
 
   double get overlayOpacity => switch (band) {
         PoseBand.solid => 1.0,
-        PoseBand.hint => 0.6,
-        PoseBand.fallback => 0.0,
+        PoseBand.hint => 0.75,
+        PoseBand.fallback => 0.5,
       };
 
-  bool get usesFallbackCard => band == PoseBand.fallback;
+  /// Whether to say out loud that tracking is weak. The path is drawn
+  /// regardless; this only drives the status chip.
+  bool get isUncertain => band != PoseBand.solid;
 }
 
 /// Rolling compass jitter, in degrees.

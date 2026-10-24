@@ -7,6 +7,7 @@ import '../services/places_service.dart';
 import '../services/poi.dart';
 import '../services/routing.dart';
 import '../services/settings.dart';
+import '../services/voice_search.dart';
 import '../theme.dart';
 import 'ar_nav_screen.dart';
 import 'ar_screen.dart';
@@ -42,6 +43,9 @@ class _HomeScreenState extends State<HomeScreen> {
   /// keystroke would be both slow and wasteful.
   LatLng? _here;
 
+  final _voice = VoiceSearch();
+  bool _listening = false;
+
   @override
   void initState() {
     super.initState();
@@ -68,12 +72,54 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     settings.removeListener(_onSettings);
+    _voice.cancel();
     _query.dispose();
     super.dispose();
   }
 
   void _onSettings() {
     if (mounted) setState(() {});
+  }
+
+  /// Tap to speak a destination. A second tap stops early; otherwise it
+  /// settles on its own after a pause and searches immediately, so the whole
+  /// interaction is one tap and a sentence.
+  Future<void> _toggleVoice() async {
+    if (_listening) {
+      await _voice.stop();
+      if (mounted) setState(() => _listening = false);
+      return;
+    }
+    final ok = await _voice.init();
+    if (!ok) {
+      if (mounted) {
+        setState(() => _error = 'Voice search is not available on this device.');
+      }
+      return;
+    }
+    setState(() {
+      _listening = true;
+      _error = null;
+    });
+    await _voice.listen(
+      onPartial: (t) {
+        if (mounted) setState(() => _query.text = t);
+      },
+      onFinal: (t) {
+        if (!mounted) return;
+        setState(() {
+          _listening = false;
+          _query.text = t;
+        });
+        _search(t);
+      },
+    );
+    // The recogniser can stop without ever producing a final result, e.g.
+    // silence or a cancelled permission dialog. Clear the listening state so
+    // the button does not stay stuck on.
+    if (mounted && !_voice.isListening && _listening) {
+      setState(() => _listening = false);
+    }
   }
 
   String get _greeting {
@@ -286,14 +332,24 @@ class _HomeScreenState extends State<HomeScreen> {
             textInputAction: TextInputAction.search,
             onSubmitted: _search,
             style: const TextStyle(color: AppColors.ink, fontSize: 15.5, fontWeight: FontWeight.w500),
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               isDense: true,
-              hintText: 'Search a place or address',
-              hintStyle: TextStyle(color: AppColors.inkSoft, fontWeight: FontWeight.w400),
+              hintText: _listening ? 'Listening…' : 'Search a place or address',
+              hintStyle: TextStyle(
+                  color: _listening ? AppColors.brand : AppColors.inkSoft,
+                  fontWeight: _listening ? FontWeight.w700 : FontWeight.w400),
               border: InputBorder.none,
-              contentPadding: EdgeInsets.symmetric(vertical: 18),
+              contentPadding: const EdgeInsets.symmetric(vertical: 18),
             ),
           ),
+        ),
+        // Mic sits inside the field, the way every maps app puts it, so
+        // speaking is as reachable as typing rather than hidden elsewhere.
+        IconButton(
+          tooltip: _listening ? 'Stop listening' : 'Search by voice',
+          onPressed: _busy ? null : _toggleVoice,
+          icon: Icon(_listening ? Icons.mic_rounded : Icons.mic_none_rounded,
+              color: _listening ? AppColors.brand : AppColors.inkSoft, size: 22),
         ),
         Padding(
           padding: const EdgeInsets.all(6),

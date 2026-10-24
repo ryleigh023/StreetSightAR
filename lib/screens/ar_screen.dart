@@ -425,16 +425,18 @@ class _ArScreenState extends State<ArScreen> {
             ..._poiWidgets(screen),
             ..._translationWidgets(screen),
             ..._storefrontWidgets(screen),
-            // Overlay density follows pose confidence. At the bottom band
-            // nothing is drawn on the world at all — a flat card and the
-            // spoken cue stay correct no matter how lost the tracking is.
+            // The path is always drawn. Confidence changes how long and how
+            // bright it is, and the status chip says when we are unsure, but
+            // it is never hidden outright — a walker who sees nothing
+            // assumes the app is broken, which is a worse failure than a
+            // dim path with a caveat attached.
+            //
             // No Opacity wrapper here: _arrow returns a Positioned, and a
             // Positioned must be a direct child of the Stack or its parent
             // data is the wrong type and layout throws every frame. The
             // painter already applies _pose.overlayOpacity itself.
-            if (!arrived && !_pose.usesFallbackCard) _arrow(turn, screen),
-            if (!arrived && _pose.usesFallbackCard) _fallbackCard(turn, remaining),
-            if (!arrived && !_pose.usesFallbackCard) _turnCone(screen),
+            if (!arrived) _arrow(turn, screen),
+            if (!arrived) _turnCone(screen),
             if (_afterglowAt != null) _afterglow(),
             _miniMap(screen),
             _bottomBar(remaining, arrived),
@@ -493,7 +495,7 @@ class _ArScreenState extends State<ArScreen> {
     // entirely. Pin it to a natural held-up-while-walking angle so the path
     // always lands where it would on the street.
     if (settings.demoWalk) return 18 * math.pi / 180;
-    return _pitchDeg.clamp(12.0, 55.0) * math.pi / 180;
+    return _pitchDeg.clamp(22.0, 55.0) * math.pi / 180;
   }
 
   Offset? _projectGround(double forward, double lateral, double phiRad, double fx, double fy, Size screen,
@@ -537,18 +539,38 @@ class _ArScreenState extends State<ArScreen> {
     final widths = <double>[];
 
     final me = _me;
-    if (me != null) {
+    {
       final pts = widget.route.points;
-      final path = [me, ...pts.sublist(_wp.clamp(0, pts.length))];
+      final reach = _ribbonRangeM * _pose.trailFraction;
 
       // Ground-plane positions of the route ahead, relative to the camera.
       final ground = <Offset>[];
-      for (var d = _ribbonStartM; d <= _ribbonRangeM * _pose.trailFraction; d += _ribbonStepM) {
-        final target = _pointAtPathDistance(path, d);
-        if (target == null) break;
-        final relRad = angleDiff(_heading, bearingDeg(me, target)) * math.pi / 180;
-        final dist = distanceM(me, target);
-        ground.add(Offset(dist * math.cos(relRad), dist * math.sin(relRad)));
+      if (me == null) {
+        // No position fix yet. Outdoors that takes tens of seconds, and
+        // drawing nothing in the meantime reads as a broken app. A straight
+        // run ahead is the best guess available, and the status chip is
+        // already saying we are still finding you.
+        for (var d = _ribbonStartM; d <= reach; d += _ribbonStepM) {
+          ground.add(Offset(d, 0));
+        }
+      } else {
+        final path = [me, ...pts.sublist(_wp.clamp(0, pts.length))];
+        for (var d = _ribbonStartM; d <= reach; d += _ribbonStepM) {
+          final target = _pointAtPathDistance(path, d);
+          if (target == null) break;
+          final relRad = angleDiff(_heading, bearingDeg(me, target)) * math.pi / 180;
+          final dist = distanceM(me, target);
+          ground.add(Offset(dist * math.cos(relRad), dist * math.sin(relRad)));
+        }
+        // The route can run out before the ribbon does, near the end or
+        // after a waypoint jump. Extend straight ahead rather than letting
+        // the path shrink to a stub.
+        if (ground.length < 3) {
+          ground.clear();
+          for (var d = _ribbonStartM; d <= reach; d += _ribbonStepM) {
+            ground.add(Offset(d, 0));
+          }
+        }
       }
 
       // Walk the strip, offsetting each sample perpendicular to the local
@@ -1045,7 +1067,7 @@ class _ArScreenState extends State<ArScreen> {
   /// system should not narrate itself, so this disappears entirely at full
   /// confidence.
   Widget _confidenceChip() {
-    if (_pose.band == PoseBand.solid) return const SizedBox.shrink();
+    if (!_pose.isUncertain) return const SizedBox.shrink();
     final poor = _pose.band == PoseBand.fallback;
     return Container(
       margin: const EdgeInsets.only(top: 8),
@@ -1062,40 +1084,6 @@ class _ArScreenState extends State<ArScreen> {
         Text(_pose.reason,
             style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
       ]),
-    );
-  }
-
-  /// The graceful-degrade path: when pose is too weak to anchor anything,
-  /// stop drawing on the world and state the instruction plainly instead.
-  Widget _fallbackCard(double turn, double remaining) {
-    final (icon, label) = turn > 25
-        ? (Icons.turn_right_rounded, 'Turn right')
-        : turn < -25
-            ? (Icons.turn_left_rounded, 'Turn left')
-            : (Icons.straight_rounded, 'Continue this direction');
-    return Center(
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 30),
-        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 22),
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.72),
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
-        ),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, color: Colors.white, size: 44),
-          const SizedBox(height: 12),
-          Text(label,
-              style: const TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 4),
-          Text(_fmtDistance(remaining),
-              style: const TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 12),
-          Text(_pose.reason,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white54, fontSize: 12, height: 1.35)),
-        ]),
-      ),
     );
   }
 

@@ -77,5 +77,9 @@
 		<string>arm64</string>
 		<string>arkit</string>
 	</array>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>StreetSight AR uses the microphone so you can speak a destination instead of typing while walking.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>StreetSight AR converts your spoken destination into a search.</string>
 </dict>
 </plist>
