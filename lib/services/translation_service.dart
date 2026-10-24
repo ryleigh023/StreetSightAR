@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'connectivity.dart';
 import 'env.dart';
+import 'settings.dart';
 import 'frame_codec.dart';
 import 'sign_translator.dart';
 
@@ -103,7 +104,7 @@ class TranslationService {
         .post(
           Uri.parse('https://translation.googleapis.com/language/translate/v2'),
           headers: Env.googleHeaders,
-          body: jsonEncode({'q': texts, 'target': 'en', 'format': 'text'}),
+          body: jsonEncode({'q': texts, 'target': settings.translateTo, 'format': 'text'}),
         )
         .timeout(const Duration(seconds: 10));
     if (translateRes.statusCode != 200) throw Exception('Cloud Translate failed (${translateRes.statusCode})');
@@ -112,7 +113,7 @@ class TranslationService {
     final out = <TranslatedBlock>[];
     for (var i = 0; i < texts.length && i < translations.length; i++) {
       final src = translations[i]['detectedSourceLanguage'];
-      if (src == 'en') continue; // already English, nothing to overlay
+      if (src == settings.translateTo) continue; // already in the target language
       out.add(TranslatedBlock(boxes[i], texts[i], _unescape(translations[i]['translatedText'])));
     }
     return out;

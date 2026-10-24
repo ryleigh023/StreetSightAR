@@ -65,6 +65,18 @@ class _SettingsSheetState extends State<_SettingsSheet> {
           ),
           const SizedBox(height: 24),
 
+          _label('Translate signs into'),
+          const SizedBox(height: 10),
+          Wrap(spacing: 9, runSpacing: 9, children: [
+            for (final e in Settings.translateOptions.entries) _langChip(e.key, e.value),
+          ]),
+          const SizedBox(height: 8),
+          const Text(
+            'Signs already in this language are left alone. Latin script only — Tamil, Arabic and Thai cannot be read.',
+            style: TextStyle(fontSize: 12, color: AppColors.inkSoft, height: 1.4),
+          ),
+          const SizedBox(height: 22),
+
           _label('Guidance'),
           const SizedBox(height: 6),
           _switchRow(
@@ -205,6 +217,25 @@ class _SettingsSheetState extends State<_SettingsSheet> {
         ),
         Switch(value: value, onChanged: onChanged, activeTrackColor: AppColors.brand),
       ]),
+    );
+  }
+
+  Widget _langChip(String code, String label) {
+    final on = settings.translateTo == code;
+    return GestureDetector(
+      onTap: () => setState(() => settings.setTranslateTo(code)),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: on ? AppColors.brand : AppColors.card,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: on ? AppColors.brand : AppColors.line),
+        ),
+        child: Text(label,
+            style: TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w700, color: on ? Colors.white : AppColors.ink)),
+      ),
     );
   }
 

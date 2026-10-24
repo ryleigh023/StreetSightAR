@@ -34,6 +34,7 @@ class Settings extends ChangeNotifier {
   static const _kTactile = 'tactileCompass';
   static const _kContrast = 'highContrast';
   static const _kDemo = 'demoWalk';
+  static const _kTranslateTo = 'translateTo';
 
   DistanceUnit unit = DistanceUnit.metric;
   NavMode mode = NavMode.ar;
@@ -60,6 +61,28 @@ class Settings extends ChangeNotifier {
   /// turned off deliberately.
   bool demoWalk = false;
 
+  /// BCP-47 code signs are translated *into*.
+  ///
+  /// This was hardwired to English, which silently broke the feature
+  /// wherever signage is already English: a block whose detected language
+  /// matches the target is skipped, so pointing at an English sign produced
+  /// nothing at all and looked like a dead feature. Making it a choice also
+  /// makes the reverse direction demonstrable.
+  String translateTo = 'en';
+
+  /// Offered targets. Limited to languages ML Kit can translate on-device,
+  /// so the feature keeps working with no network after the first download.
+  static const translateOptions = <String, String>{
+    'en': 'English',
+    'hi': 'Hindi',
+    'ta': 'Tamil',
+    'fr': 'French',
+    'es': 'Spanish',
+    'de': 'German',
+    'ja': 'Japanese',
+    'ar': 'Arabic',
+  };
+
   /// False until the first-run walkthrough has been completed or skipped.
   bool onboarded = false;
 
@@ -83,6 +106,7 @@ class Settings extends ChangeNotifier {
     tactileCompass = p.getBool(_kTactile) ?? false;
     highContrast = p.getBool(_kContrast) ?? false;
     demoWalk = p.getBool(_kDemo) ?? false;
+    translateTo = p.getString(_kTranslateTo) ?? 'en';
     recents = p.getStringList(_kRecents) ?? [];
     saved = (p.getStringList(_kSaved) ?? []).map(_decodePlace).whereType<Place>().toList();
     notifyListeners();
@@ -123,6 +147,12 @@ class Settings extends ChangeNotifier {
   Future<void> setHighContrast(bool v) async {
     highContrast = v;
     await _prefs?.setBool(_kContrast, v);
+    notifyListeners();
+  }
+
+  Future<void> setTranslateTo(String code) async {
+    translateTo = code;
+    await _prefs?.setString(_kTranslateTo, code);
     notifyListeners();
   }
 
