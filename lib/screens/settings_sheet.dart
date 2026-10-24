@@ -114,7 +114,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
           _switchRow(
             icon: Icons.play_circle_outline_rounded,
             title: 'Simulate walking the route',
-            body: 'Moves you along the route on a timer so the whole flow can be shown indoors. Resets when you close the app.',
+            body: 'Moves you along the route on a timer so the whole flow can be shown indoors. Overrides real GPS until you turn it off.',
             value: settings.demoWalk,
             onChanged: (v) => setState(() => settings.setDemoWalk(v)),
           ),
@@ -267,6 +267,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
   /// better to say so than to let someone wonder why results look thin.
   Widget _statusRow() {
     final google = Env.hasGoogleApiKey;
+    final openai = Env.hasOpenAiApiKey;
     return Container(
       padding: const EdgeInsets.all(15),
       decoration: BoxDecoration(
@@ -274,24 +275,38 @@ class _SettingsSheetState extends State<_SettingsSheet> {
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: AppColors.line),
       ),
-      child: Row(children: [
-        Icon(google ? Icons.cloud_done_rounded : Icons.public_rounded,
-            size: 20, color: google ? AppColors.sage : AppColors.inkSoft),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(google ? 'Google Places and Translate' : 'OpenStreetMap',
-                style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: AppColors.ink)),
-            const SizedBox(height: 2),
-            Text(
-              google
-                  ? 'Search, routing and sign translation use your API key.'
-                  : 'Running on the free fallbacks. Add a Google API key for richer results.',
-              style: const TextStyle(fontSize: 12, color: AppColors.inkSoft, height: 1.35),
-            ),
-          ]),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _keyRow(
+          configured: google,
+          title: 'Google key',
+          on: 'Places, Vision and Translate. Falls back to OpenStreetMap if the key is restricted or a call fails.',
+          off: 'Not set. Search and routing use OpenStreetMap, translation runs on-device.',
+        ),
+        const SizedBox(height: 12),
+        _keyRow(
+          configured: openai,
+          title: 'OpenAI key',
+          on: 'Food identification covers any cuisine.',
+          off: 'Not set. Food identification falls back to the on-device model, which knows common dishes only.',
         ),
       ]),
     );
   }
+
+  Widget _keyRow({required bool configured, required String title, required String on, required String off}) {
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Icon(configured ? Icons.cloud_done_rounded : Icons.public_rounded,
+          size: 19, color: configured ? AppColors.sage : AppColors.inkSoft),
+      const SizedBox(width: 12),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: AppColors.ink)),
+          const SizedBox(height: 2),
+          Text(configured ? on : off,
+              style: const TextStyle(fontSize: 12, color: AppColors.inkSoft, height: 1.35)),
+        ]),
+      ),
+    ]);
+  }
+
 }

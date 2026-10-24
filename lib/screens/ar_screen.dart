@@ -428,8 +428,11 @@ class _ArScreenState extends State<ArScreen> {
             // Overlay density follows pose confidence. At the bottom band
             // nothing is drawn on the world at all — a flat card and the
             // spoken cue stay correct no matter how lost the tracking is.
-            if (!arrived && !_pose.usesFallbackCard)
-              Opacity(opacity: _pose.overlayOpacity, child: _arrow(turn, screen)),
+            // No Opacity wrapper here: _arrow returns a Positioned, and a
+            // Positioned must be a direct child of the Stack or its parent
+            // data is the wrong type and layout throws every frame. The
+            // painter already applies _pose.overlayOpacity itself.
+            if (!arrived && !_pose.usesFallbackCard) _arrow(turn, screen),
             if (!arrived && _pose.usesFallbackCard) _fallbackCard(turn, remaining),
             if (!arrived && !_pose.usesFallbackCard) _turnCone(screen),
             if (_afterglowAt != null) _afterglow(),
